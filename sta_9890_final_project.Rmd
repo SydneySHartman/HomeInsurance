@@ -1,0 +1,587 @@
+
+```{r}
+
+#Proposal
+dt <- home_insurance
+
+
+#standardizing the data
+mean_vector <- 1:4
+  
+mean_vector[1]   <- mean(dt$LAST_ANN_PREM_GROSS, na.rm = TRUE)
+mean_vector[2]   <- mean(dt$SUM_INSURED_BUILDINGS, na.rm = TRUE)
+mean_vector[3]   <- mean(dt$SUM_INSURED_CONTENTS, na.rm = TRUE)
+mean_vector[4]   <- mean(dt$SPEC_SUM_INSURED, na.rm = TRUE)
+
+sd_vector <- 1:4
+
+sd_vector[1] <- sd(dt$LAST_ANN_PREM_GROSS, na.rm = TRUE)
+sd_vector[2] <- sd(dt$SUM_INSURED_BUILDINGS, na.rm = TRUE)
+sd_vector[3] <- sd(dt$SUM_INSURED_CONTENTS, na.rm = TRUE)
+sd_vector[4] <- sd(dt$SPEC_SUM_INSURED, na.rm = TRUE)
+
+dt$LAST_ANN_PREM_GROSS <- dt$LAST_ANN_PREM_GROSS/sd_vector[1]
+dt$SUM_INSURED_BUILDINGS <- dt$SUM_INSURED_BUILDINGS/sd_vector[2]  
+dt$SUM_INSURED_CONTENTS <- dt$SUM_INSURED_CONTENTS/sd_vector[3]  
+dt$SPEC_SUM_INSURED <- dt$SPEC_SUM_INSURED/sd_vector[4]
+
+
+
+write.csv(dt, file = "Final_Dataset_Home_Insurance.csv")
+
+
+
+```
+```{r}
+library(caret)
+library(ggplot2)
+library(dplyr)
+
+#This uses the data from the proposal section above
+dt <- read.csv(file = "Final_Dataset_Home_Insurance.csv")
+
+#gets rid of ID
+dt <- dt[,-1]
+
+#Look at dist of variables
+
+#Boxplots
+i = 2
+for (i in 2:44){
+  
+  if (is.factor(dt[,i]) == TRUE) {
+    show_plot <- ggplot(dt, mapping = aes(x = dt[,i], y = dt[,1])) + geom_boxplot() + xlab(var_names[i]) + ylab(var_names[1])
+    print(show_plot)
+  }
+}
+
+
+i = 2
+for (i in 2:44){
+  
+  if (is.integer(dt[,i]) == TRUE) {
+    show_plot <- ggplot(dt, mapping = aes(x = as.factor(dt[,i]), y = dt[,1])) + geom_boxplot() + xlab(var_names[i]) + ylab(var_names[1])
+    print(show_plot)
+  }
+}
+
+#Bar graphs to show age and home age dist. 
+  
+i = 42
+    show_plot <- ggplot(dt, mapping = aes(x = as.factor(dt[,i]))) + geom_bar() + xlab(var_names[i])
+    print(show_plot)
+
+  
+i = 31
+    show_plot <- ggplot(dt, mapping = aes(x = as.factor(dt[,i]))) + geom_bar() + xlab(var_names[i])
+    print(show_plot)
+    
+#Due to skewness in freq of Home ages, looked at mean, median, count to group together ages by likeness
+
+dt %>% group_by(Home.Age) %>% summarise(avg = mean(LAST_ANN_PREM_GROSS), med = median(LAST_ANN_PREM_GROSS)) 
+dt %>% group_by(Home.Age) %>% tally()
+
+#Grouped home ages based on means and medians, saw which groups had most similarties. Seems as home age inc, prem dec
+dt$HomeAgeCat[dt$Home.Age <= 101 ] <- "101_and_Below" 
+dt$HomeAgeCat[dt$Home.Age > 101 ] <- "102_to_104" 
+dt$HomeAgeCat[dt$Home.Age > 104 ] <- "Above_104" 
+
+dt %>% group_by(HomeAgeCat) %>% summarise(avg = mean(LAST_ANN_PREM_GROSS), med = median(LAST_ANN_PREM_GROSS)) 
+dt %>% group_by(HomeAgeCat) %>% tally()
+
+show_plot <- ggplot(dt, mapping = aes(x = HomeAgeCat)) + geom_bar() + xlab('HomeAgeCat')
+print(show_plot)
+    
+dt$Home.Age <- NULL
+    
+#Risk Rated Area B and C variable have too many variables. Therefore, made a table to summarize the mean, median, and count
+dt %>% group_by(RISK_RATED_AREA_B) %>% summarise(avg = mean(LAST_ANN_PREM_GROSS), med = median(LAST_ANN_PREM_GROSS))
+dt %>% group_by(RISK_RATED_AREA_B) %>% tally()
+
+dt %>% group_by(RISK_RATED_AREA_C) %>% summarise(avg = mean(LAST_ANN_PREM_GROSS), med = median(LAST_ANN_PREM_GROSS)) 
+dt %>% group_by(RISK_RATED_AREA_C) %>% tally()
+
+
+#Binarize PY_Sex, Payment_Method PY_Mar_Status, PY_Emp_Status, HomeAgeCat, and OCC_Status
+
+'First need to relevel factor data before bianrize'
+vars <- c("PAYMENT_METHOD", "PY_EMP_STATUS", "PY_MAR_STATUS", "PY_SEX", "OCC_STATUS", "HomeAgeCat") #variables to relevel
+i=1
+
+for (i in 1:5){
+  table <- as.data.frame(table(dt[,vars[i]]))
+  max <- which.max(table[,2])
+  level.name <- as.character(table[max,1])
+  dt[,vars[i]] <- relevel(dt[,vars[i]], ref = level.name)
+}
+
+#now binarize
+bin <- dummyVars(paste("~", paste(vars, collapse = "+")), data = dt, fullRank = TRUE)
+
+finished_bin <- data.frame(predict(bin, newdata= dt))
+head(finished_bin)
+
+#combine bin and delete out old cat variables to avoid overcounting
+
+dt <- cbind(dt, finished_bin)
+
+for (i in 1:6){
+  dt[,vars[i]] <- NULL
+}
+#done bianrizing data
+
+
+
+```
+
+
+
+```{r}
+'getting rid of nas'
+complete_dt <- complete.cases(dt)
+dt_new <- dt[complete_dt == TRUE,]
+
+```
+
+
+```{r}
+library(glmnet)
+library(caret)
+#Running model 100 times - Lasso
+Lasso_R_Test <- 1:100
+Lasso_R_Train <- 1:100
+for (i in 1:100){
+set.seed(i)
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+mean(train$LAST_ANN_PREM_GROSS)
+mean(test$LAST_ANN_PREM_GROSS)
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 0) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = 0)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+
+Lasso_R_Test[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, test$LAST_ANN_PREM_GROSS, Test.Predict)
+Lasso_R_Train[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, train$LAST_ANN_PREM_GROSS, Train.Predict)
+
+}
+
+```
+
+```{r}
+#Running model 100 times - Elastic
+Elastic_R_Test <- 1:100
+Elastic_R_Train <- 1:100
+for ( i in 1:100){
+set.seed(i)
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+mean(train$LAST_ANN_PREM_GROSS)
+mean(test$LAST_ANN_PREM_GROSS)
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = .5) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = .5)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+
+Elastic_R_Test[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, test$LAST_ANN_PREM_GROSS, Test.Predict)
+Elastic_R_Train[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, train$LAST_ANN_PREM_GROSS, Train.Predict)
+
+}
+
+
+```
+
+
+```{r}
+#Running model 100 times - Ridge
+library(glmnet)
+library(caret)
+Ridge_R_Test <- 1:100
+Ridge_R_Train <- 1:100
+for ( i in 1:100){
+set.seed(i)
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+mean(train$LAST_ANN_PREM_GROSS)
+mean(test$LAST_ANN_PREM_GROSS)
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 1) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = 1)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+
+Ridge_R_Test[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, test$LAST_ANN_PREM_GROSS, Test.Predict)
+Ridge_R_Train[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, train$LAST_ANN_PREM_GROSS, Train.Predict)
+
+}
+
+
+```
+
+
+```{r}
+library(randomForest)
+library(caret)
+#Running model 100 times - RF
+RF_R_Test <- 1:100
+RF_R_Train <- 1:100
+
+i = 1
+for ( i in 94:100){
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+rf <-  randomForest(LAST_ANN_PREM_GROSS∼.,data=train,ntree = 25)
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(rf, newdata =X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(rf, newdata =X.train)
+
+RF_R_Test[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, test$LAST_ANN_PREM_GROSS, Test.Predict)
+RF_R_Train[i] <- R_Sq(dt_new$LAST_ANN_PREM_GROSS, train$LAST_ANN_PREM_GROSS, Train.Predict)
+}
+
+
+
+
+
+```
+
+
+```{r}
+
+
+R_Sq <- function(Orginal_DT, Partial_DT, Model_Predictions_Partial){
+  
+  top_of_function = sum((Model_Predictions_Partial - Partial_DT)^2)/(length(Partial_DT))
+  bot_of_function = sum((mean(Orginal_DT) - Orginal_DT)^2)/(length(Orginal_DT))
+  
+  return(1- top_of_function/bot_of_function)
+  
+}
+
+```
+
+```{r}
+#R box plots
+
+
+Ridge_R_df<- cbind(data.frame(c(rep("Test", times = 100), rep("Train", times =100))),data.frame(c(Ridge_R_Test,Ridge_R_Train)))
+colnames(Ridge_R_df)<- c("R_Type", "R_Val")
+
+ggplot(Ridge_R_df) + geom_boxplot(mapping = aes( y = R_Val,group = R_Type, x= R_Type))+ ggtitle("R Values for Test v. Train. Ridge Model")
+
+
+Lasso_R_df<- cbind(data.frame(c(rep("Test", times = 100), rep("Train", times =100))),data.frame(c(Lasso_R_Test,Lasso_R_Train)))
+colnames(Lasso_R_df)<- c("R_Type", "R_Val")
+
+ggplot(Lasso_R_df) + geom_boxplot(mapping = aes( y = R_Val,group = R_Type, x= R_Type))+ ggtitle("R Values for Test v. Train. Lasso Model")
+
+
+
+
+Elastic_R_df<- cbind(data.frame(c(rep("Test", times = 100), rep("Train", times =100))),data.frame(c(Elastic_R_Test,Elastic_R_Train)))
+colnames(Elastic_R_df)<- c("R_Type", "R_Val")
+
+ggplot(Elastic_R_df) + geom_boxplot(mapping = aes( y = R_Val,group = R_Type, x= R_Type))+ ggtitle("R Values for Test v. Train. Elastic Model")
+
+
+
+RF_R_df<- cbind(data.frame(c(rep("Test", times = 100), rep("Train", times =100))),data.frame(c(RF_R_Test,RF_R_Train)))
+colnames(RF_R_df)<- c("R_Type", "R_Val")
+
+ggplot(RF_R_df) + geom_boxplot(mapping = aes( y = R_Val,group = R_Type, x= R_Type))+ ggtitle("R Values for Test v. Train. RF Model")
+
+```
+
+```{r}
+#CV Curves
+library(glmnet)
+
+set.seed(1)
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 0) 
+m$lambda.min
+plot(m)
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 1) 
+m$lambda.min
+plot(m)
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = .5) 
+m$lambda.min
+plot(m)
+
+
+
+```
+
+```{r}
+
+library(glmnet)
+library(caret)
+library(ggplot2)
+library(randomForest)
+#Res plots
+
+#Lasso
+set.seed(1)
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 0) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = 0)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+Lasso_Res_Test <-  test$LAST_ANN_PREM_GROSS - Test.Predict
+Lasso_Res_Train <-  train$LAST_ANN_PREM_GROSS - Train.Predict
+
+
+Lasso_Res_df<- cbind(data.frame(c(rep("Test", times = length(Lasso_Res_Test)), rep("Train", times =length(Lasso_Res_Train)))),data.frame(c(Lasso_Res_Test,Lasso_Res_Train)), data.frame(c(Test.Predict, Train.Predict)))
+colnames(Lasso_Res_df)<- c("Res_Type", "Res_Val", "Y_Hat")
+
+ggplot(Lasso_Res_df) + geom_point(mapping = aes( y = Res_Val,color = Res_Type, x= Y_Hat))+ ggtitle("Res Values v. Y_Hat for Test v. Train. Lasso Model")
+
+
+#Ridge
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 1) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = 1)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+Ridge_Res_Test <-  test$LAST_ANN_PREM_GROSS - Test.Predict
+Ridge_Res_Train <-  train$LAST_ANN_PREM_GROSS - Train.Predict
+
+
+Ridge_Res_df<- cbind(data.frame(c(rep("Test", times = length(Ridge_Res_Test)), rep("Train", times =length(Ridge_Res_Train)))),data.frame(c(Ridge_Res_Test,Ridge_Res_Train)), data.frame(c(Test.Predict, Train.Predict)))
+colnames(Ridge_Res_df)<- c("Res_Type", "Res_Val", "Y_Hat")
+
+ggplot(Ridge_Res_df) + geom_point(mapping = aes( y = Res_Val,color = Res_Type, x= Y_Hat))+ ggtitle("Res Values v. Y_Hat for Test v. Train. Ridge Model")
+
+
+
+#Elastic
+partition <- createDataPartition(dt_new$LAST_ANN_PREM_GROSS, list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+m <- cv.glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = .5) 
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian", lambda = m$lambda.min,
+            alpha = .5)
+
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(best_model, newx=X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(best_model, newx=X.train)
+
+Elastic_Res_Test <-  log(test$LAST_ANN_PREM_GROSS - Test.Predict)
+Elastic_Res_Train <- train$LAST_ANN_PREM_GROSS - Train.Predict
+
+
+Elastic_Res_df<- cbind(data.frame(c(rep("Test", times = length(Elastic_Res_Test)), rep("Train", times =length(Elastic_Res_Train)))),data.frame(c(Elastic_Res_Test,Elastic_Res_Train)),data.frame(c(Test.Predict, Train.Predict)))
+colnames(Elastic_Res_df) <- c("Res_Type", "Res_Val", "Y_Hat")
+
+ggplot(Elastic_Res_df) + geom_point(mapping = aes( y = Res_Val,color = Res_Type, x= Y_Hat))+ ggtitle("Res v. Y_Hat Values for Test v. Train. Elastic Model")
+
+#RF
+partition <- createDataPartition(dt_new[,'LAST_ANN_PREM_GROSS'], list = FALSE, p = .8)
+train <- dt_new[partition, ]
+test <- dt_new[-partition, ]
+
+rf <-  randomForest(LAST_ANN_PREM_GROSS∼.,data=train,ntree = 25)
+
+X.test <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,test)
+Test.Predict <- predict(rf, newdata =X.test)
+
+X.train <- model.matrix(LAST_ANN_PREM_GROSS ~ . ,train)
+Train.Predict <- predict(rf, newdata =X.train)
+
+RF_Res_Test <-  test$LAST_ANN_PREM_GROSS - Test.Predict
+RF_Res_Train <-  train$LAST_ANN_PREM_GROSS - Train.Predict
+
+
+RF_Res_df<- cbind(data.frame(c(rep("Test", times = length(RF_Res_Test)), rep("Train", times =length(RF_Res_Train)))),data.frame(c(RF_Res_Test,RF_Res_Train)), data.frame(c(Test.Predict, Train.Predict)))
+colnames(RF_Res_df) <- c("Res_Type", "Res_Val", "Y_Hat")
+
+ggplot(RF_Res_df) + geom_point(mapping = aes( y = Res_Val,color = Res_Type, x= Y_Hat)) + ggtitle("Res v. Y_Hat Values for Test v. Train. RF Model")
+
+
+
+
+
+```
+
+
+```{r}
+set.seed(1)
+#Feature selection plots
+#Lasso
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 0)
+
+m <- which.min(best_model$lambda)
+
+ahhh <- data.frame(cbind(c(1:69),unname(best_model$beta[,m])))
+colnames(ahhh) <- c("Var_Num", "Coeff")
+
+ggplot(ahhh) + geom_bar(mapping = aes(y = ahhh[,2], x = ahhh[,1]), stat = 'Identity') + xlab('Var_Num') + ylab('Coeff') + ggtitle('Coefficent Plot for Lasso')
+
+#Ridge
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = 1)
+
+m <- which.min(best_model$lambda)
+
+ahhh <- data.frame(cbind(c(1:69),unname(best_model$beta[,m])))
+colnames(ahhh) <- c("Var_Num", "Coeff")
+
+ggplot(ahhh) + geom_bar(mapping = aes(y = ahhh[,2], x = ahhh[,1]), stat = 'Identity') + xlab('Var_Num') + ylab('Coeff') + ggtitle('Coefficent Plot for Elastic')
+
+#Elastic
+X <- model.matrix(LAST_ANN_PREM_GROSS ~ .,train)
+
+best_model <-  glmnet(x = X, 
+            y = train$LAST_ANN_PREM_GROSS,
+            family = "gaussian",
+            alpha = .5)
+
+m <- which.min(best_model$lambda)
+
+ahhh <- data.frame(cbind(c(1:69),unname(best_model$beta[,m])))
+colnames(ahhh) <- c("Var_Num", "Coeff")
+
+ggplot(ahhh) + geom_bar(mapping = aes(y = ahhh[,2], x = ahhh[,1]), stat = 'Identity') + xlab('Var_Num') + ylab('Coeff') + ggtitle('Coefficent Plot for Ridge')
+
+ahhh <- data.frame(cbind(c(1:68),unname(rf$importance)))
+colnames(ahhh) <- c("Var_Num", "Importance")
+ggplot(ahhh) + geom_bar(mapping = aes(y = ahhh[,2], x = ahhh[,1]), stat = 'Identity') + xlab('Var_Num') + ylab('Importance') + ggtitle('Variable Importance Plot for RF')
+
+
+```
+
+
+
+
+
+
+```
